@@ -13,14 +13,14 @@ import AVFoundation
 
 class MapViewController: UIViewController {
     
-    var steps: [MKRoute.Step] = []
-    var stepCounter = 0
-    var router: MKRoute?
-    var showMapRoute = false
-    var navigationStarted = false
-    let locationDistance: Double = 500
+    private var steps: [MKRoute.Step] = []
+    private var stepCounter = 0
+    private var router: MKRoute?
+    private var showMapRoute = false
+    private var navigationStarted = false
+    private let locationDistance: Double = 500
     
-    var speechsynthesizer = AVSpeechSynthesizer()
+    private var speechsynthesizer = AVSpeechSynthesizer()
     private let mapView = MKMapView()
  
     
@@ -58,26 +58,19 @@ class MapViewController: UIViewController {
         return button
     }()
     
-    
-    @objc fileprivate func getDirectionButtonTapped() {
-        guard let text = textField.text else { return }
-        showMapRoute = true
-        textField.endEditing(true)
+    lazy var locationManeger: CLLocationManager = {
+          let locationManager = CLLocationManager()
         
-        let geoCoder = CLGeocoder()
-        geoCoder.geocodeAddressString(text) { (placemarks, err) in
-            if let err = err {
-                print(err.localizedDescription)
-                return
-            }
-            guard let placemarks = placemarks,
-                  let placemark = placemarks.first,
-                  let location = placemark.location
-            else {return}
-            let destinationCoordinate = location.coordinate
-             self.mapRoute(destinationCoordinate: destinationCoordinate)
+        if CLLocationManager.locationServicesEnabled() {
+            locationManager.delegate = self
+            locationManager.desiredAccuracy = kCLLocationAccuracyBest
+            handleAuthrizationStatus(locationManager: locationManager, status: CLLocationManager.authorizationStatus())
+        } else {
+            print("Location services are not enabled")
         }
-    }
+        
+        return locationManager
+    }()
     
     fileprivate func mapRoute(destinationCoordinate: CLLocationCoordinate2D) {
         guard let sourceCoordinate = locationManeger.location?.coordinate else { return }
@@ -108,26 +101,27 @@ class MapViewController: UIViewController {
     }
     
     fileprivate func getRouteSteps(route: MKRoute) {
-        
-    }
-    
-    @objc fileprivate func startStopButtonTapped() {
-        
-    }
-    
-    lazy var locationManeger: CLLocationManager = {
-          let locationManager = CLLocationManager()
-        
-        if CLLocationManager.locationServicesEnabled() {
-            locationManager.delegate = self
-            locationManager.desiredAccuracy = kCLLocationAccuracyBest
-            handleAuthrizationStatus(locationManager: locationManager, status: CLLocationManager.authorizationStatus())
-        } else {
-            print("Location services are not enabled")
+        for monitoredRegion in locationManeger.monitoredRegions {
+            locationManeger.stopMonitoring(for: monitoredRegion)
         }
         
-        return locationManager
-    }()
+        let steps = route.steps
+        self.steps = steps
+        
+        for i in 0..<steps.count {
+            let step = steps[i]
+            print (step.instructions)
+            print(step.distance)
+            
+            let region = CLCircularRegion(center: step.polyline.coordinate, radius: 20, identifier: "\(i)")
+            locationManeger.startMonitoring(for: region)
+        }
+        stepCounter += 1
+        let initialMessage = "In \(steps[stepCounter].distance) meters \(steps[stepCounter].instructions), then in \(steps[stepCounter + 1].distance) meters, \(steps[stepCounter + 1].instructions)"
+        directionLabel.text = initialMessage
+        let speechUtterance = AVSpeechUtterance(string: initialMessage)
+        speechsynthesizer.speak(speechUtterance)
+    }
     
     fileprivate func centerViewToUserLocation(center: CLLocationCoordinate2D) {
         let region = MKCoordinateRegion(center: center, latitudinalMeters: locationDistance, longitudinalMeters: locationDistance)
@@ -168,7 +162,6 @@ class MapViewController: UIViewController {
         mapView.delegate = self
         mapView.showsUserLocation = true
         locationManeger.startUpdatingLocation()
-//        checkLocationServices()
     }
     
     private func setupConstraints() {
@@ -177,32 +170,7 @@ class MapViewController: UIViewController {
                          stack(.horizontal, spacing: 16)(textField, getDirectionButton).insetting(by: 16),
                          startStopButton.insetting(by: 16),
                          mapView).fillingParent(relativeToSafeArea: true).layout(in: view)
-        
-//        view.addSubview(mapView)
-//        mapView.translatesAutoresizingMaskIntoConstraints = false
-//        
-//        NSLayoutConstraint.activate([
-//        
-//            mapView.topAnchor.constraint(equalTo: view.topAnchor),
-//            mapView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-//            mapView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-//            mapView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-//        ])
     }
-    
-//    private func setupLocationManager() {
-//        self.locationManeger.delegate = self
-//        self.locationManeger.desiredAccuracy = kCLLocationAccuracyBest
-//    }
-    
-//    private func checkLocationServices() {
-//        if CLLocationManager.locationServicesEnabled() {
-//            setupLocationManager()
-//            checkLocationAutorization()
-//        } else {
-//            // erorr
-//        }
-//    }
     
     private func checkLocationAutorization() {
         switch CLLocationManager.authorizationStatus() {
@@ -226,6 +194,44 @@ class MapViewController: UIViewController {
             fatalError()
         }
     }
+    
+    @objc fileprivate func getDirectionButtonTapped() {
+        guard let text = textField.text else { return }
+        showMapRoute = true
+        textField.endEditing(true)
+        
+        let geoCoder = CLGeocoder()
+        geoCoder.geocodeAddressString(text) { (placemarks, err) in
+            if let err = err {
+                print(err.localizedDescription)
+                return
+            }
+            guard let placemarks = placemarks,
+                  let placemark = placemarks.first,
+                  let location = placemark.location
+            else {return}
+            let destinationCoordinate = location.coordinate
+             self.mapRoute(destinationCoordinate: destinationCoordinate)
+        }
+    }
+    
+    @objc fileprivate func startStopButtonTapped() {
+        if !navigationStarted {
+            showMapRoute = true
+            if let location = locationManeger.location {
+                let center = location.coordinate
+                centerViewToUserLocation(center: center)
+            }
+        } else {
+            if let route = router {
+                self.mapView.setVisibleMapRect(route.polyline.boundingMapRect, edgePadding: UIEdgeInsets(top: 16, left: 16, bottom: 16, right: 16), animated: true)
+                self.steps.removeAll()
+                self.stepCounter = 0
+            }
+        }
+        navigationStarted.toggle()
+        startStopButton.setTitle(navigationStarted ? "Stop Navigation" : "Start Navigation", for: .normal)
+    }
 }
 
 extension MapViewController: CLLocationManagerDelegate {
@@ -242,9 +248,31 @@ extension MapViewController: CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         handleAuthrizationStatus(locationManager: locationManeger, status: status)
     }
+    
+    func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
+        stepCounter += 1
+        if stepCounter < steps.count {
+            let messeg = "In \(steps[stepCounter].distance) meters \(steps[stepCounter].instructions)"
+            directionLabel.text = messeg
+            let speechUtterance = AVSpeechUtterance(string: messeg)
+            speechsynthesizer.speak(speechUtterance)
+        } else {
+            let messege = "You have arrived at your destination"
+            directionLabel.text = messege
+            stepCounter = 0
+            navigationStarted = false
+            for monitored in locationManeger.monitoredRegions {
+                locationManeger.stopMonitoring(for: monitored)
+            }
+        }
+    }
 }
 
 extension MapViewController: MKMapViewDelegate {
-    
+    func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        let render = MKPolylineRenderer(overlay: overlay)
+        render.strokeColor = .systemBlue
+        return render
+    }
 }
 
